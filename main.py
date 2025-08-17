@@ -1,16 +1,18 @@
 # main.py
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
-from dotenv import load_dotenv
+
+from typing import Annotated
+from pydantic import BaseModel, Field
+from decimal import Decimal
+
 import os
 import mysql.connector
 from mysql.connector import pooling
 
-# Cargar .env antes de crear el app/lifespan
-load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -64,12 +66,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------- Helpers ----------------
+def convert_decimals(obj):
+    """Convierte Decimal → float para JSON serializable"""
+    if isinstance(obj, list):
+        return [convert_decimals(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: convert_decimals(v) for k, v in obj.items()}
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return obj
+
+# ---------------- Modelos ----------------
+class MedicamentoCreate(BaseModel):
+    descripcion: Annotated[str, Field(min_length=1, max_length=255)]
+    pre_cos: Annotated[Decimal, Field(max_digits=12, decimal_places=2)]
+    pre_ven: Annotated[Decimal, Field(max_digits=12, decimal_places=2)]
+    observacion: str | None = None
+    stock: Annotated[int | None, Field(ge=0)] = None  # acepta None o ≥ 0
+
+# ---------------- Rutas ----------------
 @app.get("/")
 @app.head("/")
 def health():
     return {"ok": True}
 
-@app.get("/api/medicamentos")
+@app.get("/api/all_medicamento")
 def get_medicamentos():
     pool = getattr(app.state, "pool", None)
     if pool is None:
@@ -87,5 +109,39 @@ def get_medicamentos():
         return JSONResponse(content=jsonable_encoder({"ok": True, "data": rows}))
     except mysql.connector.Error as db_err:
         raise HTTPException(status_code=500, detail=f"DB error: {db_err.msg}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/post_medicamento")
+def create_medicamento(med: MedicamentoCreate = Body(...)):
+    pool = getattr(app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=500, detail="DB pool no inicializado")
+
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.callproc(
+                "sp_create_medicamento",
+                [
+                    med.descripcion,
+                    med.pre_cos,
+                    med.pre_ven,
+                    med.observacion,
+                    med.stock,
+                ],
+            )
+            conn.commit()
+        finally:
+            cursor.close()
+            conn.close()
+
+        return {"ok": True, "message": "Medicamento creado con exito"}
+    except mysql.connector.Error as db_err:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": db_err.msg},
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
