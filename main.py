@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.encoders import jsonable_encoder
 from dotenv import load_dotenv
 import os
 import mysql.connector
@@ -70,24 +71,20 @@ def health():
 
 @app.get("/api/medicamentos")
 def get_medicamentos():
-    """
-    Endpoint sync (FastAPI ejecuta funciones sync en threadpool automáticamente,
-    evitando bloquear el loop principal con mysql-connector-python).
-    """
     pool = getattr(app.state, "pool", None)
     if pool is None:
         raise HTTPException(status_code=500, detail="DB pool no inicializado")
     try:
         conn = pool.get_connection()
         cursor = conn.cursor(dictionary=True)
-        # Llama al stored procedure que devuelve filas
         cursor.callproc("sp_listarMedicamentos")
         rows = []
         for result in cursor.stored_results():
             rows.extend(result.fetchall())
         cursor.close()
         conn.close()
-        return JSONResponse(content={"ok": True, "data": rows})
+        # usar jsonable_encoder
+        return JSONResponse(content=jsonable_encoder({"ok": True, "data": rows}))
     except mysql.connector.Error as db_err:
         raise HTTPException(status_code=500, detail=f"DB error: {db_err.msg}")
     except Exception as e:
