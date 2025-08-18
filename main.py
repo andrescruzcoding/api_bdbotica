@@ -78,6 +78,10 @@ def convert_decimals(obj):
     return obj
 
 # ---------------- Modelos ----------------
+class AuthRequest(BaseModel):
+    usuario: str = Field(..., min_length=1)
+    clave: str = Field(..., min_length=1)
+
 class MedicamentoCreate(BaseModel):
     descripcion: Annotated[str, Field(min_length=1, max_length=255)]
     pre_cos: Annotated[Decimal, Field(max_digits=12, decimal_places=2)]
@@ -94,6 +98,50 @@ class MedicamentoDelete(BaseModel):
 @app.head("/")
 def health():
     return {"ok": True}
+
+@app.post("/api/authenticate")
+def authenticate(auth: AuthRequest = Body(...)):
+    pool = getattr(app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=500, detail="DB pool no inicializado")
+
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        try:
+            # Llamamos al procedure
+            cursor.callproc("sp_authenticate_user", [auth.usuario, auth.clave])
+
+            # Si el procedure hizo SELECT en el caso de éxito, recogemos el/los resultados
+            rows = []
+            for result in cursor.stored_results():
+                rows.extend(result.fetchall())
+
+            # Cerramos recursos
+            cursor.close()
+            conn.close()
+
+            # Devolver el resultado del SELECT del procedure (ej: mensaje o datos de usuario)
+            return JSONResponse(content=jsonable_encoder({"ok": True, "data": rows}))
+
+        finally:
+            # Asegurar cierre si algo falla antes
+            try:
+                cursor.close()
+            except:
+                pass
+            try:
+                conn.close()
+            except:
+                pass
+
+    except mysql.connector.Error as db_err:
+        # Si el procedure ejecutó SIGNAL, mysql-connector lo convierte en mysql.connector.Error
+        # Aquí devolvemos el mensaje enviado por el procedure al cliente
+        return JSONResponse(status_code=401, content={"ok": False, "error": db_err.msg})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/all_medicamento")
 def get_medicamentos():
@@ -151,7 +199,7 @@ def create_medicamento(med: MedicamentoCreate = Body(...)):
         raise HTTPException(status_code=500, detail=str(e))
     
 # ---------------- Ruta DELETE ----------------
-@app.post("/api/delete_medicamento")
+@app.delete("/api/delete_medicamento")
 def delete_medicamento(med: MedicamentoDelete = Body(...)):
     pool = getattr(app.state, "pool", None)
     if pool is None:
