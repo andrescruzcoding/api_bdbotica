@@ -205,6 +205,27 @@ def get_laboratorios():
         raise HTTPException(status_code=500, detail=f"DB error: {db_err.msg}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/api/all_compra")
+def get_compras():
+    pool = getattr(app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=500, detail="DB pool no inicializado")
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.callproc("sp_list_compra")
+        rows = []
+        for result in cursor.stored_results():
+            rows.extend(result.fetchall())
+        cursor.close()
+        conn.close()
+        # usar jsonable_encoder
+        return JSONResponse(content=jsonable_encoder({"ok": True, "data": rows}))
+    except mysql.connector.Error as db_err:
+        raise HTTPException(status_code=500, detail=f"DB error: {db_err.msg}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/post_medicamento")
 def create_medicamento(med: MedicamentoCreate = Body(...)):
