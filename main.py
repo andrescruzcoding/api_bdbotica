@@ -89,9 +89,20 @@ class MedicamentoCreate(BaseModel):
     observacion: str | None = None
     stock: Annotated[int | None, Field(ge=0)] = None  # acepta None o ≥ 0
 
+class LaboratorioCreate(BaseModel):
+    ruc_lab: Annotated[str, Field(min_length=1, max_length=20)]
+    razon_social: Annotated[str, Field(min_length=1, max_length=255)]
+    direccion: Annotated[str, Field(min_length=1)]
+    telefono: Annotated[str, Field(min_length=7, max_length=15)]
+    email: Annotated[str, Field(min_length=3, max_length=200)]
+
 # ---------------- Modelo para recibir solo el ID ----------------
 class MedicamentoDelete(BaseModel):
     id_medi: int = Field(..., gt=0)  # ID obligatorio y positivo
+
+# Modelo para eliminar laboratorio (ruc_lab es VARCHAR(20))
+class LaboratorioDelete(BaseModel):
+    ruc_lab: Annotated[str, Field(min_length=1, max_length=20)]
 
 # ---------------- Rutas ----------------
 @app.get("/")
@@ -143,6 +154,7 @@ def authenticate(auth: AuthRequest = Body(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ---------------- Rutas ALL ----------------
 @app.get("/api/all_medicamento")
 def get_medicamentos():
     pool = getattr(app.state, "pool", None)
@@ -152,6 +164,27 @@ def get_medicamentos():
         conn = pool.get_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.callproc("sp_listarMedicamentos")
+        rows = []
+        for result in cursor.stored_results():
+            rows.extend(result.fetchall())
+        cursor.close()
+        conn.close()
+        # usar jsonable_encoder
+        return JSONResponse(content=jsonable_encoder({"ok": True, "data": rows}))
+    except mysql.connector.Error as db_err:
+        raise HTTPException(status_code=500, detail=f"DB error: {db_err.msg}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/api/all_laboratorio")
+def get_laboratorios():
+    pool = getattr(app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=500, detail="DB pool no inicializado")
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.callproc("sp_listarLaboratorio")
         rows = []
         for result in cursor.stored_results():
             rows.extend(result.fetchall())
@@ -198,8 +231,43 @@ def create_medicamento(med: MedicamentoCreate = Body(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
+# RUTA POST para crear laboratorio usando el stored procedure
+@app.post("/api/post_laboratorio")
+def create_laboratorio(data: LaboratorioCreate = Body(...)):
+    pool = getattr(app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=500, detail="DB pool no inicializado")
+
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor()
+        try:
+            # Llamar al procedimiento con los parámetros en el mismo orden que el procedure
+            cursor.callproc(
+                "sp_create_laboratorio",
+                [
+                    data.ruc_lab,
+                    data.razon_social,
+                    data.direccion,
+                    data.telefono,
+                    data.email,
+                ],
+            )
+            conn.commit()
+        finally:
+            cursor.close()
+            conn.close()
+
+        return JSONResponse(status_code=201, content={"ok": True, "message": "Laboratorio creado con exito", "ruc_lab": data.ruc_lab})
+
+    except mysql.connector.Error as db_err:
+        # Si el procedure lanzó SIGNAL, mysql-connector devuelve error con mensaje; devolvemos 400
+        return JSONResponse(status_code=400, content={"ok": False, "error": db_err.msg})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
 # ---------------- Ruta DELETE ----------------
-@app.delete("/api/delete_medicamento")
+@app.post("/api/delete_medicamento")
 def delete_medicamento(med: MedicamentoDelete = Body(...)):
     pool = getattr(app.state, "pool", None)
     if pool is None:
@@ -223,5 +291,33 @@ def delete_medicamento(med: MedicamentoDelete = Body(...)):
             status_code=400,
             content={"ok": False, "error": db_err.msg},
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/api/delete_laboratorio")
+def delete_laboratorio(lab: LaboratorioDelete = Body(...)):
+    pool = getattr(app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=500, detail="DB pool no inicializado")
+    
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor()
+        try:
+            # Llamar al procedimiento almacenado que recibe VARCHAR(20)
+            cursor.callproc("sp_eliminarLaboratorio", [lab.ruc_lab])
+            conn.commit()
+        finally:
+            cursor.close()
+            conn.close()
+        
+        return {"ok": True, "message": "Laboratorio eliminado correctamente"}
+    
+    except mysql.connector.Error as db_err:
+        # Si el procedure hace SIGNAL con mensaje tipo '... no existe', devolvemos 404
+        msg = db_err.msg or str(db_err)
+        if "no existe" in msg.lower():
+            return JSONResponse(status_code=404, content={"ok": False, "error": msg})
+        return JSONResponse(status_code=400, content={"ok": False, "error": msg})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
