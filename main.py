@@ -85,6 +85,10 @@ class MedicamentoCreate(BaseModel):
     observacion: str | None = None
     stock: Annotated[int | None, Field(ge=0)] = None  # acepta None o ≥ 0
 
+# ---------------- Modelo para recibir solo el ID ----------------
+class MedicamentoDelete(BaseModel):
+    id_medi: int = Field(..., gt=0)  # ID obligatorio y positivo
+
 # ---------------- Rutas ----------------
 @app.get("/")
 @app.head("/")
@@ -138,6 +142,34 @@ def create_medicamento(med: MedicamentoCreate = Body(...)):
             conn.close()
 
         return {"ok": True, "message": "Medicamento creado con exito"}
+    except mysql.connector.Error as db_err:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": db_err.msg},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# ---------------- Ruta DELETE ----------------
+@app.post("/api/delete_medicamento")
+def delete_medicamento(med: MedicamentoDelete = Body(...)):
+    pool = getattr(app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=500, detail="DB pool no inicializado")
+    
+    try:
+        conn = pool.get_connection()
+        cursor = conn.cursor()
+        try:
+            # Llamar al procedimiento almacenado
+            cursor.callproc("sp_eliminarMedicamento", [med.id_medi])
+            conn.commit()
+        finally:
+            cursor.close()
+            conn.close()
+        
+        return {"ok": True, "message": "Medicamento eliminado correctamente"}
+    
     except mysql.connector.Error as db_err:
         return JSONResponse(
             status_code=400,
