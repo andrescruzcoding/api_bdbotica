@@ -66,17 +66,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- Helpers ----------------
-def convert_decimals(obj):
-    """Convierte Decimal → float para JSON serializable"""
-    if isinstance(obj, list):
-        return [convert_decimals(x) for x in obj]
-    if isinstance(obj, dict):
-        return {k: convert_decimals(v) for k, v in obj.items()}
-    if isinstance(obj, Decimal):
-        return float(obj)
-    return obj
-
 # ---------------- Modelos ----------------
 class AuthRequest(BaseModel):
     usuario: str = Field(..., min_length=1)
